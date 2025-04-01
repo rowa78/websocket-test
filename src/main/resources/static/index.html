@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+        .message-container {
+            display: flex;
+            flex-direction: column;
+            min-width: 500px;
+        }
+        .log-container {
+            display: flex;
+            flex-direction: column;
+            min-width: 500px;
+        }
+        #messages, #pingLogs {
+            height: 300px;
+            border: 1px solid #ccc;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            padding: 10px;
+            font-family: monospace;
+            width: 100%;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 5px;
+        }
+        button {
+            padding: 5px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .status {
+            margin-bottom: 10px;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .ping {
+            color: #007bff;
+        }
+        .pong {
+            color: #28a745;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Test</h1>
+    <div id="status" class="status disconnected">Nicht verbunden</div>
+    
+    <div class="container">
+        <div class="message-container">
+            <h2>Nachrichten</h2>
+            <div id="messages"></div>
+            <div class="input-group">
+                <input type="text" id="messageInput" placeholder="Nachricht eingeben...">
+                <button onclick="sendMessage()">Senden</button>
+            </div>
+        </div>
+        
+        <div class="log-container">
+            <h2>Ping/Pong Logs</h2>
+            <div id="pingLogs"></div>
+        </div>
+    </div>
+
+    <script>
+        const messagesDiv = document.getElementById('messages');
+        const pingLogsDiv = document.getElementById('pingLogs');
+        const messageInput = document.getElementById('messageInput');
+        const statusDiv = document.getElementById('status');
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        const reconnectDelay = 3000;
+
+        function connect() {
+            ws = new WebSocket('ws://localhost:8080/ws');
+
+            ws.onopen = () => {
+                appendMessage('Verbindung hergestellt');
+                appendPingLog('Verbindung hergestellt', 'info');
+                updateStatus(true);
+                reconnectAttempts = 0;
+                // Starte Client-seitigen Ping-Timer
+                startClientPingTimer();
+            };
+
+            ws.onclose = () => {
+                appendMessage('Verbindung geschlossen');
+                appendPingLog('Verbindung geschlossen', 'info');
+                updateStatus(false);
+                stopClientPingTimer();
+                attemptReconnect();
+            };
+
+            ws.onmessage = (event) => {
+                appendMessage(event.data);
+                // Nur Ping/Pong-Nachrichten in den Logs anzeigen
+                if (event.data === 'pong') {
+                    appendPingLog('Pong vom Server empfangen', 'pong');
+                }
+            };
+
+            ws.onping = (event) => {
+                appendPingLog('Ping vom Server empfangen', 'ping');
+                // Automatische Pong-Antwort
+                ws.pong();
+                appendPingLog('Pong an Server gesendet', 'pong');
+            };
+
+            ws.onpong = (event) => {
+                appendPingLog('Pong vom Server empfangen', 'pong');
+            };
+
+            // Debug-Informationen
+            ws.onerror = (error) => {
+                appendPingLog('WebSocket Fehler: ' + error, 'error');
+            };
+        }
+
+        function updateStatus(connected) {
+            statusDiv.textContent = connected ? 'Verbunden' : 'Nicht verbunden';
+            statusDiv.className = `status ${connected ? 'connected' : 'disconnected'}`;
+        }
+
+        function attemptReconnect() {
+            if (reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                appendMessage(`Versuche erneut zu verbinden (${reconnectAttempts}/${maxReconnectAttempts})...`);
+                appendPingLog(`Wiederverbindungsversuch ${reconnectAttempts}/${maxReconnectAttempts}`, 'info');
+                setTimeout(connect, reconnectDelay);
+            } else {
+                appendMessage('Maximale Anzahl von Verbindungsversuchen erreicht');
+                appendPingLog('Maximale Anzahl von Verbindungsversuchen erreicht', 'info');
+                updateStatus(false);
+            }
+        }
+
+        function sendMessage() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = messageInput.value;
+                if (message) {
+                    ws.send(message);
+                    appendMessage('Gesendet: ' + message);
+                    messageInput.value = '';
+                }
+            } else {
+                appendMessage('Nicht verbunden - Nachricht konnte nicht gesendet werden');
+            }
+        }
+
+        function appendMessage(message) {
+            const messageElement = document.createElement('div');
+            messageElement.textContent = message;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function appendPingLog(message, type) {
+            const logElement = document.createElement('div');
+            logElement.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logElement.className = type;
+            pingLogsDiv.appendChild(logElement);
+            pingLogsDiv.scrollTop = pingLogsDiv.scrollHeight;
+        }
+
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        let clientPingInterval;
+        function startClientPingTimer() {
+            // Sende alle 5 Sekunden einen Ping
+            clientPingInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    appendPingLog('Client sendet Ping', 'ping');
+                    ws.send('ping');
+                }
+            }, 5000);
+        }
+
+        function stopClientPingTimer() {
+            if (clientPingInterval) {
+                clearInterval(clientPingInterval);
+                clientPingInterval = null;
+            }
+        }
+
+        // Initiale Verbindung herstellen
+        connect();
+    </script>
+</body>
+</html> 

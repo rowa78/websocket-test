@@ -1,0 +1,60 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '3.4.4'
+	id 'io.spring.dependency-management' version '1.1.7'
+	id 'com.google.cloud.tools.jib' version '3.4.0'
+}
+
+group = 'de.ronnywalter'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+configurations {
+	compileOnly {
+		extendsFrom annotationProcessor
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-websocket'
+	compileOnly 'org.projectlombok:lombok'
+	annotationProcessor 'org.projectlombok:lombok'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
+
+jib {
+    from {
+        image = 'eclipse-temurin:21-jre-alpine'
+    }
+     to {
+        image = "registry.rwcloud.org/websocket"
+        tags = [version.toString()]
+        auth {
+            username = providers.gradleProperty('DOCKER_USER')
+                .orElse(providers.environmentVariable('DOCKER_USER'))
+                .orElse("")
+            password = providers.gradleProperty('DOCKER_PASSWORD')
+                .orElse(providers.environmentVariable('DOCKER_PASSWORD'))
+                .orElse("")
+        }
+    }
+    container {
+        ports = ['8080']
+        mainClass = 'de.ronnywalter.websocket_test.WebsocketTestApplication'
+    }
+}
