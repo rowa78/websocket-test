@@ -24,13 +24,22 @@
             flex-direction: column;
             min-width: 500px;
         }
-        #messages, #pingLogs {
+        #messages, #pingLogs, #errorLogs {
             height: 300px;
             border: 1px solid #ccc;
             overflow-y: auto;
             margin-bottom: 20px;
             padding: 10px;
             font-family: monospace;
+            width: 100%;
+        }
+        #errorLogs {
+            height: 150px;
+            background-color: #fff5f5;
+            border: 1px solid #feb2b2;
+            padding: 10px;
+            font-family: monospace;
+            overflow-y: auto;
             width: 100%;
         }
         .input-group {
@@ -70,6 +79,15 @@
         .pong {
             color: #28a745;
         }
+        .error {
+            color: #dc3545;
+            margin: 5px 0;
+        }
+        .error-container {
+            grid-column: 1 / -1;
+            margin-top: 20px;
+            width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -92,31 +110,50 @@
         </div>
     </div>
 
+    <div class="error-container">
+        <h2>Fehler & Verbindungsprobleme</h2>
+        <div id="errorLogs"></div>
+    </div>
+
     <script>
         const messagesDiv = document.getElementById('messages');
         const pingLogsDiv = document.getElementById('pingLogs');
+        const errorLogsDiv = document.getElementById('errorLogs');
         const messageInput = document.getElementById('messageInput');
         const statusDiv = document.getElementById('status');
         let ws = null;
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 5;
         const reconnectDelay = 3000;
+        let lastConnectionTime = null;
+        let connectionDrops = 0;
 
         function connect() {
-            ws = new WebSocket('ws://localhost:8080/ws');
+            // Dynamische WebSocket-URL basierend auf der aktuellen Seite
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
+                const now = new Date();
+                if (lastConnectionTime) {
+                    const downtime = Math.round((now - lastConnectionTime) / 1000);
+                    appendError(`Verbindung wiederhergestellt nach ${downtime} Sekunden Ausfallzeit`);
+                }
+                lastConnectionTime = now;
                 appendMessage('Verbindung hergestellt');
                 appendPingLog('Verbindung hergestellt', 'info');
                 updateStatus(true);
                 reconnectAttempts = 0;
-                // Starte Client-seitigen Ping-Timer
                 startClientPingTimer();
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                lastConnectionTime = new Date();
+                connectionDrops++;
                 appendMessage('Verbindung geschlossen');
                 appendPingLog('Verbindung geschlossen', 'info');
+                appendError(`Verbindung abgebrochen (${connectionDrops}. Mal) - Code: ${event.code}, Grund: ${event.reason || 'Unbekannt'}`);
                 updateStatus(false);
                 stopClientPingTimer();
                 attemptReconnect();
@@ -124,7 +161,6 @@
 
             ws.onmessage = (event) => {
                 appendMessage(event.data);
-                // Nur Ping/Pong-Nachrichten in den Logs anzeigen
                 if (event.data === 'pong') {
                     appendPingLog('Pong vom Server empfangen', 'pong');
                 }
@@ -132,7 +168,6 @@
 
             ws.onping = (event) => {
                 appendPingLog('Ping vom Server empfangen', 'ping');
-                // Automatische Pong-Antwort
                 ws.pong();
                 appendPingLog('Pong an Server gesendet', 'pong');
             };
@@ -141,14 +176,30 @@
                 appendPingLog('Pong vom Server empfangen', 'pong');
             };
 
-            // Debug-Informationen
             ws.onerror = (error) => {
-                appendPingLog('WebSocket Fehler: ' + error, 'error');
+                appendError('WebSocket Fehler: ' + error);
             };
         }
 
+        let clientPingInterval;
+        function startClientPingTimer() {
+            clientPingInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    appendPingLog('Client sendet Ping', 'ping');
+                    ws.send('ping');
+                }
+            }, 30000);
+        }
+
+        function stopClientPingTimer() {
+            if (clientPingInterval) {
+                clearInterval(clientPingInterval);
+                clientPingInterval = null;
+            }
+        }
+
         function updateStatus(connected) {
-            statusDiv.textContent = connected ? 'Verbunden' : 'Nicht verbunden';
+            statusDiv.innerHTML = connected ? `Verbunden (${connectionDrops} Abbr&uuml;che)` : `Nicht verbunden (${connectionDrops} Abbr&uuml;che)`;
             statusDiv.className = `status ${connected ? 'connected' : 'disconnected'}`;
         }
 
@@ -157,10 +208,12 @@
                 reconnectAttempts++;
                 appendMessage(`Versuche erneut zu verbinden (${reconnectAttempts}/${maxReconnectAttempts})...`);
                 appendPingLog(`Wiederverbindungsversuch ${reconnectAttempts}/${maxReconnectAttempts}`, 'info');
+                appendError(`Wiederverbindungsversuch ${reconnectAttempts}/${maxReconnectAttempts} - N&auml;chster Versuch in ${reconnectDelay/1000} Sekunden`);
                 setTimeout(connect, reconnectDelay);
             } else {
                 appendMessage('Maximale Anzahl von Verbindungsversuchen erreicht');
                 appendPingLog('Maximale Anzahl von Verbindungsversuchen erreicht', 'info');
+                appendError('Maximale Anzahl von Wiederverbindungsversuchen erreicht - Bitte Seite neu laden');
                 updateStatus(false);
             }
         }
@@ -169,12 +222,16 @@
             if (ws && ws.readyState === WebSocket.OPEN) {
                 const message = messageInput.value;
                 if (message) {
-                    ws.send(message);
-                    appendMessage('Gesendet: ' + message);
-                    messageInput.value = '';
+                    try {
+                        ws.send(message);
+                        appendMessage('Gesendet: ' + message);
+                        messageInput.value = '';
+                    } catch (error) {
+                        appendError('Fehler beim Senden der Nachricht: ' + error.message);
+                    }
                 }
             } else {
-                appendMessage('Nicht verbunden - Nachricht konnte nicht gesendet werden');
+                appendError('Nicht verbunden - Nachricht konnte nicht gesendet werden');
             }
         }
 
@@ -193,29 +250,19 @@
             pingLogsDiv.scrollTop = pingLogsDiv.scrollHeight;
         }
 
+        function appendError(message) {
+            const errorElement = document.createElement('div');
+            errorElement.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            errorElement.className = 'error';
+            errorLogsDiv.appendChild(errorElement);
+            errorLogsDiv.scrollTop = errorLogsDiv.scrollHeight;
+        }
+
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 sendMessage();
             }
         });
-
-        let clientPingInterval;
-        function startClientPingTimer() {
-            // Sende alle 5 Sekunden einen Ping
-            clientPingInterval = setInterval(() => {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    appendPingLog('Client sendet Ping', 'ping');
-                    ws.send('ping');
-                }
-            }, 5000);
-        }
-
-        function stopClientPingTimer() {
-            if (clientPingInterval) {
-                clearInterval(clientPingInterval);
-                clientPingInterval = null;
-            }
-        }
 
         // Initiale Verbindung herstellen
         connect();
